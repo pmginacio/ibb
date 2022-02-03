@@ -1,0 +1,7 @@
+#!/bin/bash -eu
+# 
+source ibblib
+source $1
+shift
+
+ibuild $@

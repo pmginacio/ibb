@@ -1,0 +1,175 @@
+# variables
+declare -A IBB_FUN_COUNTER
+declare -A IBB_ALIAS
+declare -a IBB_PHONY
+declare -a IBB_CLEAN
+IBB_LAST_TGT=""
+IBB_INIT=false
+IBB_DEBUG=false
+
+# helper functions
+ibdebug() { ! ${IBB_DEBUG:-false} || echo -e "DEBUG: $@"; }
+iberror() { echo -e "ERROR: $@"; exit 3; }
+
+## copied from bash-fun
+iblist() { for i in "$@"; do echo "$i"; done }
+ibflat() { cat - | xargs; }
+##
+ibrep() { sed 's/'$1'/'${2:-}'/g'; }
+ibprf() { while read VAL; do echo $1$VAL; done }
+ibsuf() { while read VAL; do echo $VAL$1; done }
+
+# 
+ibrule() {
+    local FUN
+    local -a LARGS=()
+    local -a LTGTS=()
+    local -a LDEPS=()
+    local HAVE_DEP_PATT=false
+    local HAVE_TGT_PATT=false
+    local HAVE_AT_LEAST_ONE_TGT=false
+    
+    # the function name is obtained from the first arg
+    # drop the leading @ from the function name if used 
+    # as a phony target
+    [[ ${1:-} =~ \@.* ]] && FUN="${1:1}" || FUN="${1}"
+    ibdebug "\nnew rule for $FUN"
+    if [[ -z ${IBB_FUN_COUNTER[$FUN]:-} ]]; then
+        # export function if not available yet
+        if [[ $(type -t $FUN) == 'function' ]]; then
+            ibdebug "exporting new function $FUN"
+            export -f $FUN
+        fi
+        IBB_FUN_COUNTER[$FUN]=0
+        IBB_ALIAS[$FUN]=""
+        IBB_PHONY+=($FUN)
+    else
+        # increment function counter
+        ((IBB_FUN_COUNTER[$FUN]++)) || true
+    fi
+    ibdebug "IBB_FUN_COUNTER[$FUN]=${IBB_FUN_COUNTER[$FUN]}"
+
+    # parse arguments for command to be executed and strip marker characters
+    for ARG in "$@"; do
+        case $ARG in
+            \?:*|\@:*)
+                # drop argument
+                ibdebug "dropping $ARG" >&2
+                ;;
+            \?*%*)
+                # found a pattern dependency
+                # replace with make auto variable
+                # there can be only one of these
+                ibdebug "found pattern dependency $ARG" >&2
+                if ! $HAVE_DEP_PATT; then
+                    LARGS+=('$<')
+                    HAVE_DEP_PATT=true
+                else
+                    iberror "found multiple pattern dependencies for rule: $FUN"
+                fi
+                ;;
+            \@*%*)
+                # found a pattern target
+                # replace with make auto variable
+                # there can be only one of these
+                ibdebug "found pattern target $ARG" >&2
+                if ! $HAVE_TGT_PATT; then
+                    LARGS+=('$@')
+                    HAVE_TGT_PATT=true
+                else
+                    iberror "found multiple pattern targets for rule: $FUN"
+                fi
+                ;;
+            \?* | \@*)
+                # strip first char
+                ibdebug "found target/dependency $ARG" >&2
+                LARGS+=(${ARG:1})
+                ;;
+            *)
+                ibdebug "found silent argument $ARG" >&2
+                LARGS+=($ARG)
+                ;;
+        esac
+    done                             
+                
+    # parse arguments for makefile rule and strip marker characters
+    local -a LVALS=()
+    local TGT
+    for ARG in "$@"; do
+        if [[ $ARG =~ \@.* ]]; then
+            # if @: then strip both, otherwise strip only @
+            [[ $ARG =~ \@:.* ]] && TGT=(${ARG:2}) || TGT=(${ARG:1})
+            LTGTS+=("$TGT")
+            IBB_LAST_TGT="$TGT"
+            HAVE_AT_LEAST_ONE_TGT=true
+        elif [[ $ARG =~ \?.* ]]; then
+            # if ?: then strip both, otherwise strip only @
+            [[ $ARG =~ \?:.* ]] && LDEPS+=(${ARG:2}) || LDEPS+=(${ARG:1})
+        else
+            ibdebug "adding value to dependencies $ARG"
+            LVALS+=($ARG)
+        fi
+    done
+    
+    # check there is at least one target
+    $HAVE_AT_LEAST_ONE_TGT || iberror "found no target for rule $FUN"
+    
+    # append all targets to clean
+    IBB_ALIAS[$FUN]+=" ${LTGTS[@]}"
+    IBB_CLEAN+=(${LTGTS[@]})
+    
+    # handle silent values
+    if [[ ${#LVALS[@]} > 0 ]]; then
+        ibdebug "rule $FUN has values: ${LVALS[@]}"
+                
+        # add file to dependencies
+        local IBB_DIR=".ibb"
+        [[ -d "$IBB_DIR" ]] || mkdir "$IBB_DIR"
+        local VFILE="$IBB_DIR/.$FUN.$(printf "%03d" ${IBB_FUN_COUNTER[$FUN]})"
+        ibdebug VFILE=$VFILE
+        [[ ! -f $VFILE ]] && touch $VFILE
+        LDEPS+=($VFILE)
+        
+        # check if values changed
+        for VAL in "${LVALS[@]}"; do
+            echo "$VAL"
+        done >"$VFILE.tmp"
+
+        # trigger rule with modified dependency if any value changed        
+        if ! diff -q "$VFILE.tmp" "$VFILE" >/dev/null; then
+            ibdebug "rule $FUN values changed:"
+            ${IBB_DEBUG:-false} && diff "$VFILE.tmp" "$VFILE" || true
+            
+            mv "$VFILE.tmp" "$VFILE"
+        else
+            ibdebug "rule $FUN values did not change"
+            rm "$VFILE.tmp"
+        fi
+    fi
+    # 
+    
+    # initalize makefile if needed
+    if ! $IBB_INIT; then
+        echo "SHELL:=/bin/bash" >Makefile
+        echo ".ONESHELL:" >>Makefile
+        echo -e "\nall: ibb_last_target\n" >>Makefile
+        IBB_INIT=true
+    fi
+    
+    # print rules
+    echo "${LTGTS[@]}: ${LDEPS[@]}" >>Makefile
+    echo -e "\t@${LARGS[@]}" >>Makefile
+    
+    ibdebug "${LTGTS[@]}: ${LDEPS[@]}"
+    ibdebug "\t@${LARGS[@]}"
+}
+
+ibbuild() {
+    echo -e "\nibb_last_target: $IBB_LAST_TGT" >>Makefile
+    for FUN in "${!IBB_ALIAS[@]}"; do
+        echo -e "\n$FUN: ${IBB_ALIAS[@]}" >>Makefile
+    done
+    echo -e "\nclean: ${IBB_CLEAN[@]}" >>Makefile
+    echo -e "\n.PHONY: ibb_last_target clean ${IBB_PHONY[@]}" >>Makefile
+    make $@
+}
