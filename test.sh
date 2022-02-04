@@ -9,7 +9,7 @@ source ibblib
 # : means that this argument is ignored when building the command
 # which means that the command that will be executed is
 #   bcftools index -f "().vcf.gz"
-irule bcftools index -f "?%.vcf.gz" "@:%.vcf.gz.csi"
+ibrule bcftools index -f "?%.vcf.gz" "@:%.vcf.gz.csi"
 
 # 
 declare -a LFILES
@@ -25,4 +25,4 @@ mrg() {
     echo merging $N files ...
     bcftools concat -O z ${@:1:N} >"$OUT"
 }
-irule mrg 3 @input.vcf.gz $(list ${LFILES[*]} | prf ? | unlist) $(list ${LFILES[*]} | prf ?: | suf '.csi' | unlist)
+ibrule mrg 2 @input.vcf.gz $(iblist ${LFILES[*]} | ibprf ? | ibflat) $(iblist ${LFILES[*]} | ibprf ?: | ibsuf '.csi' | ibflat)

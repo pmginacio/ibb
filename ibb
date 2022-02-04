@@ -1,7 +1,42 @@
 #!/bin/bash -eu
-# 
 source ibblib
-source $1
-shift
 
-ibuild $@
+# defaults
+SKIP_MAKE=false
+
+# parse my arguments
+if [[ "${1:-}" == '-s' ]] || [[ "${1:-}" == "--skip" ]]; then
+    SKIP_MAKE=true
+    shift
+fi
+
+# now get the script and its options
+SCRIPT="$1"
+shift
+# NOTE: source $SCRIPT will look for script starting at the topmost directory in $PATH
+#       this is a problem, so to avoid this we need to make $SCRIPT a abspath
+# try appending PWD
+SCRIPT="$(PWD)/$1"
+if [[ ! -f "$SCRIPT" ]]; then
+    echo "ERROR: could not find file: $SCRIPT"
+fi
+
+declare -a SOPTS
+while [[ ${1} != '--' ]]; do
+    SOPTS+=($1)
+    shift;
+done
+shift
+# remaining options are for make
+
+# source script and generate makefile
+# only trigger if makefile is out of date
+if [[ "$IBB_MAKEFILE" -ot "$SCRIPT" ]]; then
+    # generate rules
+    source "$SCRIPT" $SOPTS
+    # terminate makefile
+    ibbuild
+fi
+
+# call make with remaining arguments -> TODO
+$SKIP_MAKE || make $@

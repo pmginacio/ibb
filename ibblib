@@ -6,6 +6,8 @@ declare -a IBB_CLEAN
 IBB_LAST_TGT=""
 IBB_INIT=false
 IBB_DEBUG=false
+IBB_EXPORTED_FUN_FILE="$PWD/.exported-functions"
+IBB_MAKEFILE="Makefile"
 
 # helper functions
 ibdebug() { ! ${IBB_DEBUG:-false} || echo -e "DEBUG: $@"; }
@@ -29,6 +31,15 @@ ibrule() {
     local HAVE_TGT_PATT=false
     local HAVE_AT_LEAST_ONE_TGT=false
     
+    # initalize files
+    if ! $IBB_INIT; then
+        echo "# auto generated file with exported functions for makefile" >"$IBB_EXPORTED_FUN_FILE"
+        echo "SHELL:=/bin/bash" >"$IBB_MAKEFILE"
+        echo ".ONESHELL:" >>"$IBB_MAKEFILE"
+        echo -e "\nall: ibb_last_target\n" >>"$IBB_MAKEFILE"
+        IBB_INIT=true
+    fi
+    
     # the function name is obtained from the first arg
     # drop the leading @ from the function name if used 
     # as a phony target
@@ -38,7 +49,7 @@ ibrule() {
         # export function if not available yet
         if [[ $(type -t $FUN) == 'function' ]]; then
             ibdebug "exporting new function $FUN"
-            export -f $FUN
+            declare -f $FUN >>"$IBB_EXPORTED_FUN_FILE"
         fi
         IBB_FUN_COUNTER[$FUN]=0
         IBB_ALIAS[$FUN]=""
@@ -146,30 +157,22 @@ ibrule() {
             rm "$VFILE.tmp"
         fi
     fi
-    # 
-    
-    # initalize makefile if needed
-    if ! $IBB_INIT; then
-        echo "SHELL:=/bin/bash" >Makefile
-        echo ".ONESHELL:" >>Makefile
-        echo -e "\nall: ibb_last_target\n" >>Makefile
-        IBB_INIT=true
-    fi
     
     # print rules
-    echo "${LTGTS[@]}: ${LDEPS[@]}" >>Makefile
-    echo -e "\t@${LARGS[@]}" >>Makefile
+    echo "${LTGTS[@]}: ${LDEPS[@]}" >>"$IBB_MAKEFILE"
+    echo -e "\t@source \"$IBB_EXPORTED_FUN_FILE\"" >>"$IBB_MAKEFILE"
+    echo -e "\t@${LARGS[@]}" >>"$IBB_MAKEFILE"
     
     ibdebug "${LTGTS[@]}: ${LDEPS[@]}"
     ibdebug "\t@${LARGS[@]}"
 }
 
 ibbuild() {
-    echo -e "\nibb_last_target: $IBB_LAST_TGT" >>Makefile
+    echo -e "\nibb_last_target: $IBB_LAST_TGT" >>"$IBB_MAKEFILE"
     for FUN in "${!IBB_ALIAS[@]}"; do
-        echo -e "\n$FUN: ${IBB_ALIAS[@]}" >>Makefile
+        echo -e "\n$FUN: ${IBB_ALIAS[@]}" >>"$IBB_MAKEFILE"
     done
-    echo -e "\nclean: ${IBB_CLEAN[@]}" >>Makefile
-    echo -e "\n.PHONY: ibb_last_target clean ${IBB_PHONY[@]}" >>Makefile
-    make $@
+    echo -e "\nclean:\n\trm -fv ${IBB_CLEAN[@]/\%/*}" >>"$IBB_MAKEFILE"
+    echo -e "\n.PHONY: ibb_last_target clean ${IBB_PHONY[@]}" >>"$IBB_MAKEFILE"
+    # make $@
 }
