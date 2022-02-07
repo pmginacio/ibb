@@ -27,6 +27,7 @@ ibrule() {
     local -a LARGS=()
     local -a LTGTS=()
     local -a LDEPS=()
+    local -a LORDD=()
     local HAVE_DEP_PATT=false
     local HAVE_TGT_PATT=false
     local HAVE_AT_LEAST_ONE_TGT=false
@@ -62,16 +63,25 @@ ibrule() {
 
     # parse arguments for command to be executed and strip marker characters
     for ARG in "$@"; do
-        case $ARG in
+        case "$ARG" in
+            \?\+*)
+                # order-only prerequisite
+                if [[ "$ARG" =~ \?\+:.* ]]; then
+                    ibdebug "dropping order-only prerequisite: $ARG" >&2
+                else
+                    ibdebug "found order-only prerequisite: $ARG" >&2
+                    LARGS+=("${ARG:2}")
+                fi
+                ;;
             \?:*|\@:*)
-                # drop argument
-                ibdebug "dropping $ARG" >&2
+                # drop argument from command call
+                ibdebug "dropping: $ARG" >&2
                 ;;
             \?*%*)
                 # found a pattern dependency
                 # replace with make auto variable
                 # there can be only one of these
-                ibdebug "found pattern dependency $ARG" >&2
+                ibdebug "found pattern dependency: $ARG" >&2
                 if ! $HAVE_DEP_PATT; then
                     LARGS+=('$<')
                     HAVE_DEP_PATT=true
@@ -83,7 +93,7 @@ ibrule() {
                 # found a pattern target
                 # replace with make auto variable
                 # there can be only one of these
-                ibdebug "found pattern target $ARG" >&2
+                ibdebug "found pattern target: $ARG" >&2
                 if ! $HAVE_TGT_PATT; then
                     LARGS+=('$@')
                     HAVE_TGT_PATT=true
@@ -93,12 +103,12 @@ ibrule() {
                 ;;
             \?* | \@*)
                 # strip first char
-                ibdebug "found target/dependency $ARG" >&2
-                LARGS+=(${ARG:1})
+                ibdebug "found target/dependency: $ARG" >&2
+                LARGS+=("${ARG:1}")
                 ;;
             *)
-                ibdebug "found silent argument $ARG" >&2
-                LARGS+=($ARG)
+                ibdebug "found silent argument: $ARG" >&2
+                LARGS+=("$ARG")
                 ;;
         esac
     done                             
@@ -107,18 +117,29 @@ ibrule() {
     local -a LVALS=()
     local TGT
     for ARG in "$@"; do
-        if [[ $ARG =~ \@.* ]]; then
+        if [[ "$ARG" =~ \@.* ]]; then
             # if @: then strip both, otherwise strip only @
-            [[ $ARG =~ \@:.* ]] && TGT=(${ARG:2}) || TGT=(${ARG:1})
+            [[ "$ARG" =~ \@:.* ]] && TGT=(${ARG:2}) || TGT=(${ARG:1})
             LTGTS+=("$TGT")
             IBB_LAST_TGT="$TGT"
             HAVE_AT_LEAST_ONE_TGT=true
-        elif [[ $ARG =~ \?.* ]]; then
-            # if ?: then strip both, otherwise strip only @
-            [[ $ARG =~ \?:.* ]] && LDEPS+=(${ARG:2}) || LDEPS+=(${ARG:1})
+        elif [[ "$ARG" =~ \?.* ]]; then
+            if [[ "$ARG" =~ \?:\+.*  || $ARG =~ \?\+:.* ]]; then
+                # ?:+ or ?+: -> order only pre-requisite
+                LORDD+=("${ARG:3}")
+            elif [[ "$ARG" =~ \?\+.* ]]; then
+                # ?+ -> order only pre-requisite
+                LORDD+=("${ARG:2}")
+            elif [[ $ARG =~ \?:.*  ]]; then
+                # ?: -> pre-requisite
+                LDEPS+=("${ARG:2}")
+            else
+                # ? -> pre-requisite
+                LDEPS+=("${ARG:1}")
+            fi            
         else
             ibdebug "adding value to dependencies $ARG"
-            LVALS+=($ARG)
+            LVALS+=("$ARG")
         fi
     done
     
@@ -159,7 +180,12 @@ ibrule() {
     fi
     
     # print rules
-    echo "${LTGTS[@]}: ${LDEPS[@]}" >>"$IBB_MAKEFILE"
+    echo -n "${LTGTS[@]}: ${LDEPS[@]}" >>"$IBB_MAKEFILE"
+    if [[ ${#LORDD[@]} > 0 ]]; then 
+        echo " | ${LORDD[@]}" >>"$IBB_MAKEFILE"
+    else
+        echo "" >>"$IBB_MAKEFILE"
+    fi
     echo -e "\t@source \"$IBB_EXPORTED_FUN_FILE\"" >>"$IBB_MAKEFILE"
     echo -e "\t@${LARGS[@]}" >>"$IBB_MAKEFILE"
     

@@ -2,40 +2,75 @@
 source ibblib
 
 # defaults
+IBB_DEBUG=true
 SKIP_MAKE=false
+REBUILD_MAKEFILE=false
+SELF="$(basename $0)"
+HELP="$SELF - incremental bash builds
+
+Usage:
+    ibb [ibb_opts] ibbscript [ibb_script_opts] [-- make_opts]
+    
+There are three sets of options in the ibb call. options to the ibb 
+command itset, options for the ibbscript that will be compiler and
+options for GNU Make.
+    
+Where [ibb_opts] are:
+    -s, --skip      do not call make
+    -f, --force     force makefile rebuild
+
+ibbscript is a bash script which makes calls to ibb functions. please
+check documentation for more details. ibb_script_opts are the set of 
+options which are passed to ibbscript. make_opts are optional, if you
+want to used them you must terminate ibb_script_opts with '--'.
+"
 
 # parse my arguments
-if [[ "${1:-}" == '-s' ]] || [[ "${1:-}" == "--skip" ]]; then
-    SKIP_MAKE=true
+while [[ "${1:-}" =~ ^-.* ]]; do
+    case $1 in
+        -s|--skip)
+            SKIP_MAKE=true
+            ;;
+        -f|--force)
+            REBUILD_MAKEFILE=true
+            ;;
+        *)
+            iberror "unknown option: $1"
+            ;;
+    esac
     shift
-fi
+done
 
 # now get the script and its options
-SCRIPT="$1"
-shift
+[[ $# > 0 ]] || iberror "too few input arguments:\n$HELP"
+
 # NOTE: source $SCRIPT will look for script starting at the topmost directory in $PATH
 #       this is a problem, so to avoid this we need to make $SCRIPT a abspath
 # try appending PWD
-SCRIPT="$(PWD)/$1"
+SCRIPT="$(realpath $1)"
+shift
 if [[ ! -f "$SCRIPT" ]]; then
-    echo "ERROR: could not find file: $SCRIPT"
+    error "could not find file: $SCRIPT"
 fi
 
 declare -a SOPTS
-while [[ ${1} != '--' ]]; do
+while [[ ! -z ${1:-} && ${1:-} != '--' ]]; do
     SOPTS+=($1)
     shift;
 done
-shift
+[[ ${1:-} == '--' ]] && shift
+# echo SOPTS=${SOPTS[@]}
 # remaining options are for make
 
 # source script and generate makefile
 # only trigger if makefile is out of date
-if [[ "$IBB_MAKEFILE" -ot "$SCRIPT" ]]; then
+if $REBUILD_MAKEFILE || [[ "$IBB_MAKEFILE" -ot "$SCRIPT" ]]; then
     # generate rules
-    source "$SCRIPT" $SOPTS
+    source "$SCRIPT" ${SOPTS[@]}
     # terminate makefile
     ibbuild
+else
+    echo "Makefile is up-to-date" >&2
 fi
 
 # call make with remaining arguments -> TODO
